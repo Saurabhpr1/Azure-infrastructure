@@ -1,0 +1,143 @@
+name: infra_devSecOps_pipeline
+
+trigger: none
+variables:
+- group: New variable group #variable group name h
+- name: codepath # ye pipeline ka variable h
+  value: $(System.DefaultWorkingDirectory)/environment/dev
+
+pool: Default
+stages:
+- stage: terraform_tool
+  displayName: Tool install
+  jobs:
+  - job: setup_terraform
+    steps:
+    - task: TerraformInstaller@1
+      inputs:
+        terraformVersion: 'latest'
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(codepath)'
+        backendServiceArm: 'Azure Service'
+        backendAzureRmStorageAccountName: 'devstoragedevaccount'
+        backendAzureRmContainerName: 'terraformcotainer'
+        backendAzureRmKey: 'deve.tfstate'
+- stage: static_analysis
+  dependsOn: terraform_tool
+  displayName: Static Analysis
+  jobs:
+  - job: tflint_job
+    displayName: TFLint
+    steps:
+    - checkout: self
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(codepath)'
+        backendServiceArm: 'Azure Service'
+        backendAzureRmStorageAccountName: 'devstoragedevaccount'
+        backendAzureRmContainerName: 'terraformcotainer'
+        backendAzureRmKey: 'deve.tfstate'
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(codepath)'
+        script: |
+          & "C:\tflint\tflint.exe" --init
+          & "C:\tflint\tflint.exe" --format json > tflint-report.json
+          exit 0
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(codepath)\tflint-report.json'
+        artifact: 'TFLint-report'
+        publishLocation: 'pipeline'
+  - job: checkov_job
+    dependsOn: tflint_job
+    displayName: Checkov
+    steps:
+    - checkout: self
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(codepath)'
+        script: |
+          & "C:\checkov\dist\_\checkov.exe" -d . --output json --output-file checkov-report.json
+          exit 0
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Checkov Report'
+      inputs:
+        targetPath: '$(codepath)/checkov-report.json'
+        artifact: 'CheckovReport'
+
+  - job: terrascan_job
+    dependsOn: checkov_job
+    displayName: Terrascan
+    steps:
+    - task: PowerShell@2
+      displayName: 'Run Terrascan'
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(codepath)'
+        script: |
+          & "C:\terrascan\terrascan.exe" scan -i terraform -d . -o json > terrascan-report.json
+          exit 0
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish Terrascan Report'
+      inputs:
+        targetPath: '$(codepath)/terrascan-report.json'
+        artifact: 'TerrascanReport'
+- stage: infracost_analysis
+  dependsOn: static_analysis
+  jobs:
+  - job: plan_and_cost_analysis
+    steps:
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(codepath)'
+        backendServiceArm: 'Azure Service'
+        backendAzureRmStorageAccountName: 'devstoragedevaccount'
+        backendAzureRmContainerName: 'terraformcotainer'
+        backendAzureRmKey: 'deve.tfstate'
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'plan'
+        workingDirectory: '$(codepath)'
+        commandOptions: '-out=tfplan'
+        environmentServiceNameAzureRM: 'Azure Service'
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        workingDirectory: '$(codepath)'
+        script: |
+          & "C:\infracost\infracost.exe" breakdown --path tfplan
+      env:
+        INFRACOST_API_KEY: $(INFRACOST_API_KEY)
+  
+- stage: terraform_apply
+  dependsOn: infracost_analysis
+  jobs:
+  - job: apply_job
+    steps:
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'init'
+        workingDirectory: '$(codepath)'
+        backendServiceArm: 'Azure Service'
+        backendAzureRmStorageAccountName: 'devstoragedevaccount'
+        backendAzureRmContainerName: 'terraformcotainer'
+        backendAzureRmKey: 'deve.tfstate'
+    - task: TerraformTask@5
+      inputs:
+        provider: 'azurerm'
+        command: 'apply'
+        workingDirectory: '$(codepath)'
+        environmentServiceNameAzureRM: 'Azure Service'
