@@ -3,7 +3,7 @@ RG = {
     name     = "dev-rgtest"
     location = "west us"
   }
-}
+}  
 Vnet = {
   vnet1 = {
     vnet_name           = "dev-testvnet"
