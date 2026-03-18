@@ -1,7 +1,7 @@
 output "vnet_name_from_module" {
   value = module.virtualnetwork.vnet_name
 
-}
+}  
 output "vnet_id_from_module" {
   value = module.virtualnetwork.virtual_network_ids["vnet1"] // iska matlab virtualnetwork module ke andar virtual_network_ids map se vnet1 ka id le raha hai  {sirf vnet1 ka output de ga yhan vnet1 key h tfvars me}
 
